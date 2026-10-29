@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life OS</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f4f5f7; color: #1f2937; }
+  h1 { font-size: 1.4rem; margin: 0 0 16px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  
+  .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+  .card, .panel { background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .panel { margin-bottom: 16px; }
+  .label { font-size: .75rem; color: #6b7280; }
+  .value { font-size: 1.2rem; font-weight: 600; margin-top: 4px; }
+  .goal { margin-bottom: 14px; }
+  .goal-top { display: flex; justify-content: space-between; font-size: .9rem; margin-bottom: 4px; }
+  .bar { background: #e5e7eb; border-radius: 8px; height: 12px; overflow: hidden; }
+  .bar > div { background: #3b82f6; height: 100%; }
+  .muted { color: #6b7280; font-size: .85rem; }
+  .error { color: #b91c1c; }
+  .chart-box { max-width: 260px; margin: 0 auto; }
+  .btn { display: inline-block; background: #3b82f6; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 8px; font-size: .9rem; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+  <h1>Life OS</h1>
+  <a class="btn" href="/export/excel">Excel Report</a>
+  <a class="btn" href="/add">+ Add data</a>
+  <div class="cards" id="cards"></div>
+
+  <div class="panel">
+    <h2 id="spend-title">Spending this month</h2>
+    <div class="chart-box"><canvas id="spendChart"></canvas></div>
+    <p class="muted" id="spend-empty" style="display:none">No expenses recorded for this month yet.</p>
+  </div>
+
+  <div class="panel">
+    <h2>Goals</h2>
+    <div id="goals"></div>
+  </div>
+  
+  <div class="panel">
+    <h2>Goal projections</h2>
+    <div id="projections"></div>
+  </div>
+<script>
+const rupee = n => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+
+async function getJSON(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(url + ' failed (' + r.status + ')');
+  return r.json();
+}
+
+function showError(id, err) {
+  const el = document.getElementById(id);
+  el.textContent = 'Could not load: ' + err.message;
+  el.className = 'error';
+}
+
+async function loadSummary() {
+  const s = await getJSON('/analytics/summary');
+  const items = [
+    ['Net worth', s.net_worth],
+    ['Cash in accounts', s.accounts_total],
+    ['Investments', s.investments_current_value],
+    ['Investment gain', s.investment_gain],
+  ];
+  const box = document.getElementById('cards');
+  for (const [label, val] of items) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    const l = document.createElement('div');
+    l.className = 'label';
+    l.textContent = label;
+    const v = document.createElement('div');
+    v.className = 'value';
+    v.textContent = rupee(val);
+    card.append(l, v);
+    box.append(card);
+  }
+}
+
+async function loadSpending() {
+  const data = await getJSON('/analytics/expenses/by-category');
+  const monthName = new Date(data.year, data.month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+  document.getElementById('spend-title').textContent =
+    'Spending in ' + monthName + ' (' + rupee(data.total) + ')';
+
+  if (data.by_category.length === 0) {
+    document.getElementById('spend-empty').style.display = 'block';
+    document.getElementById('.chart-box').style.display = 'none';
+    return;
+  }
+
+  new Chart(document.getElementById('spendChart'), {
+    type: 'doughnut',
+    data: {
+      labels: data.by_category.map(c => c.category),
+      datasets: [{ data: data.by_category.map(c => c.amount) }],
+    },
+    options: { plugins: { legend: { position: 'bottom' } } },
+  });
+}
+
+async function loadGoals() {
+  const goals = await getJSON('/analytics/goals/progress');
+  const box = document.getElementById('goals');
+  if (goals.length === 0) {
+    box.textContent = 'No goals yet.';
+    return;
+  }
+  for (const g of goals) {
+    const wrap = document.createElement('div');
+    wrap.className = 'goal';
+
+    const top = document.createElement('div');
+    top.className = 'goal-top';
+    const name = document.createElement('span');
+    name.textContent = g.name;
+    const pct = document.createElement('span');
+    pct.textContent = g.percent_complete + '%';
+    top.append(name, pct);
+
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const fill = document.createElement('div');
+    fill.style.width = Math.min(g.percent_complete, 100) + '%';
+    bar.append(fill);
+
+    const note = document.createElement('div');
+    note.className = 'muted';
+    let text = rupee(g.current_amount) + ' of ' + rupee(g.target_amount);
+    if (g.needed_per_month) text += ' · need ' + rupee(g.needed_per_month) + '/month';
+    if (g.status === 'overdue') text += ' · overdue';
+    note.textContent = text;
+
+    wrap.append(top, bar, note);
+    box.append(wrap);
+  }
+}
+async function loadProjections() {
+  const items = await getJSON('/analytics/goals/projection');
+  const box = document.getElementById('projections');
+  if (items.length === 0) {
+    box.textContent = 'No goals yet.';
+    return;
+  }
+  const fmtDate = d => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+
+  for (const p of items) {
+    const wrap = document.createElement('div');
+    wrap.className = 'goal';
+
+    const title = document.createElement('div');
+    title.className = 'goal-top';
+    const name = document.createElement('span');
+    name.textContent = p.name;
+    title.append(name);
+
+    const note = document.createElement('div');
+    note.className = 'muted';
+    let text;
+    if (p.status === 'completed') text = 'Goal reached 🎉';
+    else if (p.status === 'no_data') text = 'No contributions logged yet.';
+    else if (p.status === 'stalled') text = 'No recent savings, so no projection.';
+    else if (p.status === 'too_slow') text = 'At this pace the goal is decades away.';
+    else {
+      text = 'Saving ' + rupee(p.monthly_pace) + '/month → reach it around ' + fmtDate(p.projected_date);
+      if (p.status === 'on_track') text += ' · on track ✅';
+      if (p.status === 'behind') {
+        text += ' · behind target (' + fmtDate(p.target_date) + ')';
+        if (p.extra_needed_per_month) text += ' · save ' + rupee(p.extra_needed_per_month) + ' more/month';
+      }
+    }
+    note.textContent = text;
+
+    wrap.append(title, note);
+    box.append(wrap);
+  }
+}
+
+loadSummary().catch(e => showError('cards', e));
+loadSpending().catch(e => showError('spend-title', e));
+loadGoals().catch(e => showError('goals', e));
+loadProjections().catch(e => showError('projections', e));
+</script>
+</body>
+</html>

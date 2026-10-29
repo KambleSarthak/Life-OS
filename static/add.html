@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life OS - Add</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f4f5f7; color: #1f2937; max-width: 640px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  nav { margin-bottom: 16px; }
+  nav a { color: #3b82f6; text-decoration: none; margin-right: 14px; font-size: .9rem; }
+  .panel { background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 16px; }
+  label { display: block; font-size: .75rem; color: #6b7280; margin: 10px 0 4px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 1rem; }
+  button { background: #3b82f6; color: #fff; border: 0; padding: 11px 16px; border-radius: 8px; font-size: .95rem; margin-top: 14px; cursor: pointer; }
+  button.small { background: #fee2e2; color: #b91c1c; padding: 4px 10px; margin: 0; font-size: .8rem; }
+  .msg { font-size: .85rem; margin-top: 8px; min-height: 1em; color: #15803d; }
+  .msg.error { color: #b91c1c; }
+  .row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: .9rem; }
+  .muted { color: #6b7280; font-size: .8rem; }
+  .inline { display: flex; gap: 8px; align-items: center; }
+  .inline input { width: 120px; padding: 6px 8px; }
+  button.ok { background: #dcfce7; color: #15803d; padding: 4px 10px; margin: 0; font-size: .8rem; }
+  .btns { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+  <h1>Add data</h1>
+  <nav><a href="/dashboard">← Dashboard</a></nav>
+
+  <div class="panel">
+    <h2>New expense</h2>
+    <form id="expense-form">
+      <label>Date</label>
+      <input type="date" name="date" required>
+      <label>Category</label>
+      <input type="text" name="category" list="cats" placeholder="e.g. Food" required>
+      <datalist id="cats">
+        <option value="Food"><option value="Travel"><option value="Rent">
+        <option value="Bills"><option value="Shopping"><option value="Health"><option value="Entertainment">
+      </datalist>
+      <label>Amount (₹)</label>
+      <input type="number" name="amount" min="0.01" step="0.01" inputmode="decimal" required>
+      <label>Notes (optional)</label>
+      <input type="text" name="notes">
+      <button type="submit">Save expense</button>
+      <div class="msg" id="expense-msg"></div>
+    </form>
+  </div>
+
+  <div class="panel">
+    <h2>Recent expenses</h2>
+    <div id="recent"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Add money to a goal</h2>
+    <form id="contrib-form">
+      <label>Goal</label>
+      <select name="goal_id" required></select>
+      <label>Date</label>
+      <input type="date" name="date" required>
+      <label>Amount (₹)</label>
+      <input type="number" name="amount" min="0.01" step="0.01" inputmode="decimal" required>
+      <label>Notes (optional)</label>
+      <input type="text" name="notes">
+      <button type="submit">Save contribution</button>
+      <div class="msg" id="contrib-msg"></div>
+    </form>
+  </div>
+  <div class="panel">
+    <h2>To-dos</h2>
+    <form id="todo-form">
+      <label>Task</label>
+      <input type="text" name="title" required>
+      <label>Due date (optional)</label>
+      <input type="date" name="due_date">
+      <label>Priority</label>
+      <select name="priority">
+        <option value="low">Low</option>
+        <option value="medium" selected>Medium</option>
+        <option value="high">High</option>
+      </select>
+      <button type="submit">Add to-do</button>
+      <div class="msg" id="todo-msg"></div>
+    </form>
+    <div id="todo-list" style="margin-top:12px"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Account balances</h2>
+    <div id="account-list"></div>
+    <div class="msg" id="account-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Investment prices</h2>
+    <p class="muted">Enter the current price per unit.</p>
+    <div id="invest-list"></div>
+    <div class="msg" id="invest-msg"></div>
+  </div>
+<script>
+const rupee = n => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+// Local date as YYYY-MM-DD (toISOString would use UTC and show yesterday early in the morning in India)
+function todayStr() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+async function send(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) throw new Error('Request failed (' + r.status + ')');
+  return r.json();
+}
+
+function flash(id, text, isError) {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg' + (isError ? ' error' : '');
+}
+
+// ---------- Expenses ----------
+async function loadExpenses() {
+  const all = await send('GET', '/expenses/');
+  all.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  const box = document.getElementById('recent');
+  box.replaceChildren();
+  if (all.length === 0) { box.textContent = 'No expenses yet.'; return; }
+
+  for (const e of all.slice(0, 10)) {
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const left = document.createElement('div');
+    const title = document.createElement('div');
+    title.textContent = e.category + ' · ' + rupee(e.amount);
+    const sub = document.createElement('div');
+    sub.className = 'muted';
+    sub.textContent = e.date + (e.notes ? ' · ' + e.notes : '');
+    left.append(title, sub);
+
+    const del = document.createElement('button');
+    del.className = 'small';
+    del.textContent = 'Delete';
+    del.onclick = async () => {
+      if (!confirm('Delete this expense?')) return;
+      await send('DELETE', '/expenses/' + e.id);
+      loadExpenses();
+    };
+
+    row.append(left, del);
+    box.append(row);
+  }
+}
+
+document.getElementById('expense-form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    await send('POST', '/expenses/', {
+      date: f['date'].value,
+      category: f['category'].value.trim(),
+      amount: parseFloat(f['amount'].value),
+      notes: f['notes'].value.trim() || null,
+    });
+    flash('expense-msg', 'Expense saved ✅');
+    f['amount'].value = '';
+    f['notes'].value = '';
+    loadExpenses();
+  } catch (err) {
+    flash('expense-msg', err.message, true);
+  }
+});
+
+// ---------- Goal contributions ----------
+async function loadGoals() {
+  const goals = await send('GET', '/goals/');
+  const sel = document.querySelector('#contrib-form select');
+  sel.replaceChildren();
+  for (const g of goals) {
+    const opt = document.createElement('option');
+    opt.value = g.id;
+    opt.textContent = g.name;
+    sel.append(opt);
+  }
+  if (goals.length === 0) {
+    const opt = document.createElement('option');
+    opt.textContent = 'No goals yet - add one in /docs';
+    opt.value = '';
+    sel.append(opt);
+  }
+}
+
+document.getElementById('contrib-form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    await send('POST', '/contributions/', {
+      goal_id: parseInt(f['goal_id'].value, 10),
+      date: f['date'].value,
+      amount: parseFloat(f['amount'].value),
+      notes: f['notes'].value.trim() || null,
+    });
+    flash('contrib-msg', 'Contribution saved ✅ (check the dashboard)');
+    f['amount'].value = '';
+    f['notes'].value = '';
+  } catch (err) {
+    flash('contrib-msg', err.message, true);
+  }
+});
+
+// ---------- Start ----------
+document.querySelectorAll('input[type=date]').forEach(i => i.value = todayStr());
+loadExpenses().catch(e => flash('expense-msg', e.message, true));
+loadGoals().catch(e => flash('contrib-msg', e.message, true));
+
+// ---------- To-dos ----------
+async function loadTodos() {
+  const all = await send('GET', '/todos/');
+  const open = all.filter(t => t.status !== 'done');
+  const rank = { high: 0, medium: 1, low: 2 };
+  open.sort((a, b) =>
+    ((rank[a.priority] ?? 1) - (rank[b.priority] ?? 1)) ||
+    (a.due_date || '9999').localeCompare(b.due_date || '9999'));
+
+  const box = document.getElementById('todo-list');
+  box.replaceChildren();
+  if (open.length === 0) { box.textContent = 'Nothing pending 🎉'; return; }
+
+  for (const t of open) {
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const left = document.createElement('div');
+    const title = document.createElement('div');
+    title.textContent = t.title;
+    const sub = document.createElement('div');
+    sub.className = 'muted';
+    sub.textContent = t.priority + (t.due_date ? ' · due ' + t.due_date : '');
+    left.append(title, sub);
+
+    const done = document.createElement('button');
+    done.className = 'ok';
+    done.textContent = 'Done';
+    done.onclick = async () => {
+      await send('PUT', '/todos/' + t.id,
+        { title: t.title, due_date: t.due_date, status: 'done', priority: t.priority });
+      loadTodos();
+    };
+
+    const del = document.createElement('button');
+    del.className = 'small';
+    del.textContent = 'Delete';
+    del.onclick = async () => {
+      if (!confirm('Delete this to-do?')) return;
+      await send('DELETE', '/todos/' + t.id);
+      loadTodos();
+    };
+
+    const btns = document.createElement('div');
+    btns.className = 'btns';
+    btns.append(done, del);
+    row.append(left, btns);
+    box.append(row);
+  }
+}
+
+document.getElementById('todo-form').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const f = ev.target.elements;
+  try {
+    await send('POST', '/todos/', {
+      title: f['title'].value.trim(),
+      due_date: f['due_date'].value || null,
+      status: 'pending',
+      priority: f['priority'].value,
+    });
+    flash('todo-msg', 'To-do added ✅');
+    f['title'].value = '';
+    f['due_date'].value = '';
+    loadTodos();
+  } catch (err) {
+    flash('todo-msg', err.message, true);
+  }
+});
+
+// ---------- Account balances ----------
+async function loadAccounts() {
+  const all = await send('GET', '/accounts/');
+  const box = document.getElementById('account-list');
+  box.replaceChildren();
+  if (all.length === 0) { box.textContent = 'No accounts yet.'; return; }
+
+  for (const a of all) {
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const left = document.createElement('div');
+    const name = document.createElement('div');
+    name.textContent = a.name;
+    const type = document.createElement('div');
+    type.className = 'muted';
+    type.textContent = a.account_type;
+    left.append(name, type);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = '0.01';
+    input.value = a.balance;
+
+    const save = document.createElement('button');
+    save.className = 'ok';
+    save.textContent = 'Save';
+    save.onclick = async () => {
+      const v = parseFloat(input.value);
+      if (Number.isNaN(v)) { flash('account-msg', 'Enter a number', true); return; }
+      try {
+        await send('PUT', '/accounts/' + a.id,
+          { name: a.name, account_type: a.account_type, balance: v });
+        flash('account-msg', a.name + ' updated ✅');
+      } catch (err) {
+        flash('account-msg', err.message, true);
+      }
+    };
+
+    const wrap = document.createElement('div');
+    wrap.className = 'inline';
+    wrap.append(input, save);
+    row.append(left, wrap);
+    box.append(row);
+  }
+}
+
+// ---------- Investment prices ----------
+async function loadInvestments() {
+  const all = await send('GET', '/investments/');
+  const box = document.getElementById('invest-list');
+  box.replaceChildren();
+  if (all.length === 0) { box.textContent = 'No investments yet.'; return; }
+
+  for (const i of all) {
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const left = document.createElement('div');
+    const name = document.createElement('div');
+    name.textContent = i.name;
+    const sub = document.createElement('div');
+    sub.className = 'muted';
+    sub.textContent = i.units + ' units · bought at ' + rupee(i.buy_price);
+    left.append(name, sub);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.step = '0.01';
+    input.value = i.current_value;
+
+    const save = document.createElement('button');
+    save.className = 'ok';
+    save.textContent = 'Save';
+    save.onclick = async () => {
+      const v = parseFloat(input.value);
+      if (Number.isNaN(v)) { flash('invest-msg', 'Enter a number', true); return; }
+      try {
+        await send('PUT', '/investments/' + i.id, {
+          name: i.name, investment_type: i.investment_type,
+          units: i.units, buy_price: i.buy_price, current_value: v,
+        });
+        flash('invest-msg', i.name + ' updated ✅');
+      } catch (err) {
+        flash('invest-msg', err.message, true);
+      }
+    };
+
+    const wrap = document.createElement('div');
+    wrap.className = 'inline';
+    wrap.append(input, save);
+    row.append(left, wrap);
+    box.append(row);
+  }
+}
+
+loadTodos().catch(e => flash('todo-msg', e.message, true));
+loadAccounts().catch(e => flash('account-msg', e.message, true));
+loadInvestments().catch(e => flash('invest-msg', e.message, true));
+</script>
+</body>
+</html>
